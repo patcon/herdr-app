@@ -1,0 +1,96 @@
+# Intel Mac build for this fork. Upstream dropped macos-x86_64 in 1988a87;
+# this restores the cross-build it used (x86_64-apple-darwin on an Apple
+# Silicon runner), ad hoc signed, and attaches the archive to a GitHub
+# release named intel-v<version>. The app's updater finds no Intel build in
+# upstream's manifest, so it leaves this one alone: rebuild to update.
+name: intel mac build
+run-name: intel mac ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Attach the archive to a GitHub release (intel-v<version>)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: intel-mac-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: 1.95.0
+  ZIG_VERSION: 0.16.0
+  TARGET: macos-x86_64
+  RUST_TARGET: x86_64-apple-darwin
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ env.RUST_TARGET }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Restore build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &cache-paths |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: intel-v1-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            intel-v1-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}-
+            intel-v1-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-
+      - name: Keep unchanged sources fresh
+        run: scripts/ci-sources restore
+      - name: Build and pack
+        run: scripts/package "$RUST_TARGET"
+      - name: Check the binary is Intel
+        run: |
+          tar -xzf "dist/herdr-app-$TARGET.tar.gz" -C "$RUNNER_TEMP"
+          lipo -archs "$RUNNER_TEMP/Herdr.app/Contents/MacOS/Herdr" | tee /dev/stderr | grep -qx x86_64
+      - name: Note the sources the cache was built from
+        run: scripts/ci-sources record
+      - name: Save build cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cache-paths
+          key: intel-v1-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: herdr-app-${{ env.TARGET }}
+          path: dist/herdr-app-${{ env.TARGET }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+      - name: Attach to a GitHub release
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          tag="intel-v$version"
+          file="dist/herdr-app-$TARGET.tar.gz"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$file" --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" "$file" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Herdr $version (Intel Mac)" \
+              --notes "Unofficial Intel Mac build of Herdr $version from ${GITHUB_SHA::7}, ad hoc signed. After downloading: tar -xzf herdr-app-$TARGET.tar.gz && xattr -dr com.apple.quarantine Herdr.app"
+          fi
