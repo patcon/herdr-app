@@ -211,13 +211,14 @@ printf 'dev PATH added' >> "$3"''')
         self.assertEqual(len(calls), 2)
         self.assertTrue(calls[1].startswith("--verify --deep --strict "))
 
-    def test_intel_mac_package_stops_before_build(self):
+    def test_intel_mac_package_builds(self):
         for args in ((), ("x86_64-apple-darwin",)):
             with self.subTest(args=args):
                 result = self.run_script("scripts/package", "Darwin", "x86_64", *args)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("Intel Macs aren't supported; build from source", result.stderr)
-                self.assertNotIn("unexpected build", result.stderr)
+                self.assertIn("package: herdr-app", result.stdout)
+                self.assertIn("for macos-x86_64", result.stdout)
+                self.assertIn("unexpected build", result.stderr)
+                self.assertNotIn("Intel Macs", result.stderr)
 
     def test_supported_installers_still_try_download(self):
         for os_name, arch in (("Darwin", "arm64"), ("Linux", "x86_64"), ("Linux", "aarch64")):
